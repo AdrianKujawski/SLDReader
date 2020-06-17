@@ -1,6 +1,5 @@
-import buble from 'rollup-plugin-buble';
-
-const resolve = require('rollup-plugin-node-resolve');
+import buble from '@rollup/plugin-buble';
+import resolve from '@rollup/plugin-node-resolve';
 
 export default {
   input: 'src/index.js',
@@ -10,14 +9,11 @@ export default {
     format: 'umd',
     name: 'SLDReader',
     globals: {
-      'ol/style/style': 'ol.style.Style',
-      'ol/style/fill': 'ol.style.Fill',
-      'ol/style/stroke': 'ol.style.Stroke',
-      'ol/style/circle': 'ol.style.Circle',
-      'ol/style/icon': 'ol.style.Icon',
-      'ol/style/text': 'ol.style.Text',
-      'ol/style/regularshape': 'ol.style.RegularShape',
+      'ol/style': 'ol.style',
+      'ol/render': 'ol.render',
+      'ol/extent': 'ol.extent',
+      'ol/geom': 'ol.geom',
     },
   },
-  plugins: [buble(), resolve()],
+  plugins: [buble({ objectAssign: true }), resolve()],
 };

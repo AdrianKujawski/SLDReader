@@ -77,6 +77,18 @@ describe('filter rules', () => {
       expect(filterSelector(filter, featureuneq)).to.be.true;
     });
 
+    it('propertyisnull', () => {
+      const featureeq = { properties: { PERIMETER: 1071304933 } };
+      const filter = {
+        type: 'comparison',
+        operator: 'propertyisnull',
+        propertyname: 'PERIMETER',
+      };
+      expect(filterSelector(filter, featureeq)).to.be.false;
+      const featureuneq = { properties: { PERIMETER: null } };
+      expect(filterSelector(filter, featureuneq)).to.be.true;
+    });
+
     it('propertyislessthanorequalto', () => {
       const feature = { properties: { PERIMETER: 1071304933 } };
       const filter = {
@@ -256,9 +268,9 @@ describe('filter rules', () => {
         literal: 'Kwik',
       };
 
-      const kwekFilter = Object.assign({}, kwikFilter, { literal: 'Kwek' });
+      const kwekFilter = { ...kwikFilter, literal: 'Kwek' };
 
-      const kwakFilter = Object.assign({}, kwikFilter, { literal: 'Kwak' });
+      const kwakFilter = { ...kwikFilter, literal: 'Kwak' };
 
       const duckling = { properties: { name: 'Kwak' } };
 
@@ -392,7 +404,8 @@ describe('Custom property extraction', () => {
     };
 
     const result = filterSelector(filter, myFeature, {
-      getProperties: feature => feature.getAttributes(),
+      getProperty: (feature, propertyName) =>
+        feature.getAttributes()[propertyName],
     });
 
     expect(result).to.be.false;
@@ -418,7 +431,8 @@ describe('Custom property extraction', () => {
     };
 
     const result = filterSelector(filter, myFeature, {
-      getProperties: feature => feature.getAttributes(),
+      getProperty: (feature, propertyName) =>
+        feature.getAttributes()[propertyName],
     });
 
     expect(result).to.be.true;

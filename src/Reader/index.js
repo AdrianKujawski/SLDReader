@@ -1,3 +1,9 @@
+import createFilter from './filter';
+
+/**
+ * @module
+ */
+
 /**
  * Generic parser for elements with maxOccurs > 1
  * it pushes result of readNode(node) to array on obj[prop]
@@ -15,6 +21,26 @@ function addPropArray(node, obj, prop) {
 }
 
 /**
+ * Generic parser for elements that can be arrays
+ * @private
+ * @param {Element} node the xml element to parse
+ * @param {object|Array} obj  the object or array to modify
+ * @param {string} prop key on obj to hold array
+ */
+function addPropOrArray(node, obj, prop) {
+  const property = prop.toLowerCase();
+  const item = {};
+  readNode(node, item);
+  if (!(property in obj)) {
+    obj[property] = item;
+  } else if (Array.isArray(obj[property])) {
+    obj[property].push(item);
+  } else {
+    obj[property] = [obj[property], item];
+  }
+}
+
+/**
  * Generic parser for maxOccurs = 1 (the xsd default)
  * it sets result of readNode(node) to array on obj[prop]
  * @private
@@ -26,17 +52,6 @@ function addProp(node, obj, prop) {
   const property = prop.toLowerCase();
   obj[property] = {};
   readNode(node, obj[property]);
-}
-
-/**
- * Parser for filter comparison operators
- * @private
- * @type {[type]}
- */
-function addFilterComparison(node, obj, prop) {
-  obj.type = 'comparison';
-  obj.operator = prop.toLowerCase();
-  readNode(node, obj);
 }
 
 /**
@@ -57,6 +72,79 @@ function addPropWithTextContent(node, obj, prop, trimText = false) {
 }
 
 /**
+ * This function parses SLD XML nodes that can contain an SLD filter expression.
+ * If the SLD node contains only text elements, the result will be concatenated into a string.
+ * If the SLD node contains one or more non-literal nodes (for now, only PropertyName), the result
+ * will be an object with type:"expression" and an array of child nodes of which one or more have
+ * the type "propertyname".
+ *
+ * Functions and arithmetic operators (Add,Sub,Mul,Div) are not supported (yet).
+ * Note: for now, only these contents will be parsed:
+ * * Plain text nodes.
+ * * CDATA sections.
+ * * ogc:PropertyName elements (property name will be parsed as trimmed text).
+ * * ogc:Literal elements (contents will be parsed as trimmed text).
+ * See also:
+ * * http://schemas.opengis.net/filter/1.1.0/expr.xsd
+ * * https://docs.geoserver.org/stable/en/user/styling/sld/reference/filters.html#sld-filter-expression
+ * @private
+ * @param {Element} node XML Node.
+ * @param {object} obj Object to add XML node contents to.
+ * @param {string} prop Property name on obj that will hold the parsed node contents.
+ * @param {bool} [skipEmptyNodes] Default true. If true, emtpy (whitespace-only) text nodes will me omitted in the result.
+ */
+function addFilterExpressionProp(node, obj, prop, skipEmptyNodes = true) {
+  const childExpressions = [];
+
+  for (let k = 0; k < node.childNodes.length; k += 1) {
+    const childNode = node.childNodes[k];
+    const childExpression = {};
+    if (
+      childNode.namespaceURI === 'http://www.opengis.net/ogc' &&
+      childNode.localName === 'PropertyName'
+    ) {
+      // Add ogc:PropertyName elements as type:propertyname.
+      childExpression.type = 'propertyname';
+      childExpression.value = childNode.textContent.trim();
+    } else if (childNode.nodeName === '#cdata-section') {
+      // Add CDATA section text content untrimmed.
+      childExpression.type = 'literal';
+      childExpression.value = childNode.textContent;
+    } else {
+      // Add ogc:Literal elements and plain text nodes as type:literal.
+      childExpression.type = 'literal';
+      childExpression.value = childNode.textContent.trim();
+    }
+
+    if (childExpression.type === 'literal' && skipEmptyNodes) {
+      if (childExpression.value.trim()) {
+        childExpressions.push(childExpression);
+      }
+    } else {
+      childExpressions.push(childExpression);
+    }
+  }
+
+  const property = prop.toLowerCase();
+
+  // If expression children are all literals, concatenate them into a string.
+  const allLiteral = childExpressions.every(
+    childExpression => childExpression.type === 'literal'
+  );
+
+  if (allLiteral) {
+    obj[property] = childExpressions
+      .map(expression => expression.value)
+      .join('');
+  } else {
+    obj[property] = {
+      type: 'expression',
+      children: childExpressions,
+    };
+  }
+}
+
+/**
  * recieves boolean of element with tagName
  * @private
  * @param  {Element} element [description]
@@ -64,7 +152,10 @@ function addPropWithTextContent(node, obj, prop, trimText = false) {
  * @return {boolean}
  */
 function getBool(element, tagName) {
-  const collection = element.getElementsByTagNameNS('http://www.opengis.net/sld', tagName);
+  const collection = element.getElementsByTagNameNS(
+    'http://www.opengis.net/sld',
+    tagName
+  );
   if (collection.length) {
     return Boolean(collection.item(0).textContent);
   }
@@ -74,18 +165,17 @@ function getBool(element, tagName) {
 /**
  * css and svg params
  * @private
- * @param  {[type]} element          [description]
- * @param  {[type]} obj              [description]
- * @param  {String} [propname='css'] [description]
- * @return {[type]}                  [description]
+ * @param  {Element} element
+ * @param  {object} obj
+ * @param  {String} prop
  */
 function parameters(element, obj, prop) {
   const propnames = {
-    CssParameter: 'css',
-    SvgParameter: 'svg',
+    CssParameter: 'styling',
+    SvgParameter: 'styling',
     VendorOption: 'vendoroption',
   };
-  const propname = propnames[prop] || 'css';
+  const propname = propnames[prop] || 'styling';
   obj[propname] = obj[propname] || {};
   const name = element
     .getAttribute('name')
@@ -110,60 +200,27 @@ function addFunction(node, obj, prop) {
 }
 
 const FilterParsers = {
-  Filter: addProp,
+  Filter: (element, obj) => {
+    obj.filter = createFilter(element);
+  },
   ElseFilter: (element, obj) => {
     obj.elsefilter = true;
-  },
-  Or: (element, obj) => {
-    obj.type = 'or';
-    obj.predicates = [];
-    readNodeArray(element, obj, 'predicates');
-  },
-  And: (element, obj) => {
-    obj.type = 'and';
-    obj.predicates = [];
-    readNodeArray(element, obj, 'predicates');
-  },
-  Not: (element, obj) => {
-    obj.type = 'not';
-    obj.predicate = {};
-    readNode(element, obj.predicate);
-  },
-  PropertyIsEqualTo: addFilterComparison,
-  PropertyIsNotEqualTo: addFilterComparison,
-  PropertyIsLessThan: addFilterComparison,
-  PropertyIsLessThanOrEqualTo: addFilterComparison,
-  PropertyIsGreaterThan: addFilterComparison,
-  PropertyIsGreaterThanOrEqualTo: addFilterComparison,
-  PropertyIsBetween: addFilterComparison,
-  PropertyIsLike: (element, obj, prop) => {
-    addFilterComparison(element, obj, prop);
-    obj.wildcard = element.getAttribute('wildCard');
-    obj.singlechar = element.getAttribute('singleChar');
-    obj.escapechar = element.getAttribute('escapeChar');
-  },
-  PropertyName: addPropWithTextContent,
-  Literal: addPropWithTextContent,
-  LowerBoundary: (element, obj, prop) => addPropWithTextContent(element, obj, prop, true),
-  UpperBoundary: (element, obj, prop) => addPropWithTextContent(element, obj, prop, true),
-  FeatureId: (element, obj) => {
-    obj.type = 'featureid';
-    obj.fids = obj.fids || [];
-    obj.fids.push(element.getAttribute('fid'));
   },
 };
 
 const SymbParsers = {
-  PolygonSymbolizer: addProp,
-  LineSymbolizer: addProp,
-  PointSymbolizer: addProp,
-  TextSymbolizer: addProp,
+  PolygonSymbolizer: addPropOrArray,
+  LineSymbolizer: addPropOrArray,
+  PointSymbolizer: addPropOrArray,
+  TextSymbolizer: addPropOrArray,
   Fill: addProp,
   Stroke: addProp,
+  GraphicStroke: addProp,
+  GraphicFill: addProp,
   Graphic: addProp,
   ExternalGraphic: addProp,
   Mark: addProp,
-  Label: addTextProp,
+  Label: (node, obj, prop) => addFilterExpressionProp(node, obj, prop, false),
   Halo: addProp,
   Font: addProp,
   Radius: addPropWithTextContent,
@@ -174,11 +231,12 @@ const SymbParsers = {
   AnchorPoint: addProp,
   AnchorPointX: addPropWithTextContent,
   AnchorPointY: addPropWithTextContent,
-  Rotation: addPropWithTextContent,
+  Opacity: addFilterExpressionProp,
+  Rotation: addFilterExpressionProp,
   Displacement: addProp,
   DisplacementX: addPropWithTextContent,
   DisplacementY: addPropWithTextContent,
-  Size: addPropWithTextContent,
+  Size: addFilterExpressionProp,
   WellKnownName: addPropWithTextContent,
   VendorOption: parameters,
   OnlineResource: (element, obj) => {
@@ -194,43 +252,40 @@ const SymbParsers = {
  * @private
  * @type {Object}
  */
-const parsers = Object.assign(
-  {
-    NamedLayer: (element, obj) => {
-      addPropArray(element, obj, 'layers');
-    },
-    UserLayer: (element, obj) => {
-      addPropArray(element, obj, 'layers');
-    },
-    UserStyle: (element, obj) => {
-      obj.styles = obj.styles || [];
-      const style = {
-        default: getBool(element, 'IsDefault'),
-        featuretypestyles: [],
-      };
-      readNode(element, style);
-      obj.styles.push(style);
-    },
-    FeatureTypeStyle: (element, obj) => {
-      const featuretypestyle = {
-        rules: [],
-      };
-      readNode(element, featuretypestyle);
-      obj.featuretypestyles.push(featuretypestyle);
-    },
-    Rule: (element, obj) => {
-      const rule = {};
-      readNode(element, rule);
-      obj.rules.push(rule);
-    },
-
-    Name: addPropWithTextContent,
-    MaxScaleDenominator: addPropWithTextContent,
-    MinScaleDenominator: addPropWithTextContent,
+const parsers = {
+  NamedLayer: (element, obj) => {
+    addPropArray(element, obj, 'layers');
   },
-  FilterParsers,
-  SymbParsers
-);
+  UserLayer: (element, obj) => {
+    addPropArray(element, obj, 'layers');
+  },
+  UserStyle: (element, obj) => {
+    obj.styles = obj.styles || [];
+    const style = {
+      default: getBool(element, 'IsDefault'),
+      featuretypestyles: [],
+    };
+    readNode(element, style);
+    obj.styles.push(style);
+  },
+  FeatureTypeStyle: (element, obj) => {
+    const featuretypestyle = {
+      rules: [],
+    };
+    readNode(element, featuretypestyle);
+    obj.featuretypestyles.push(featuretypestyle);
+  },
+  Rule: (element, obj) => {
+    const rule = {};
+    readNode(element, rule);
+    obj.rules.push(rule);
+  },
+  Name: addPropWithTextContent,
+  MaxScaleDenominator: addPropWithTextContent,
+  MinScaleDenominator: addPropWithTextContent,
+  ...FilterParsers,
+  ...SymbParsers,
+};
 
 /**
  * walks over xml nodes
@@ -245,55 +300,6 @@ function readNode(node, obj) {
       parsers[n.localName](n, obj, n.localName);
     }
   }
-}
-
-/**
- * Parse all children of an element as an array in obj[prop]
- * @private
- * @param {Element} node parent xml element
- * @param {object} obj the object to modify
- * @param {string} prop the name of the array prop to fill with parsed child nodes
- * @return {void}
- */
-function readNodeArray(node, obj, prop) {
-  const property = prop.toLowerCase();
-  obj[property] = [];
-  for (let n = node.firstElementChild; n; n = n.nextElementSibling) {
-    if (parsers[n.localName]) {
-      const childObj = {};
-      parsers[n.localName](n, childObj, n.localName);
-      obj[property].push(childObj);
-    }
-  }
-}
-
-/**
- * Generic parser for text props
- * It looks for nodeName #text and #cdata-section to get all text in labels
- * it sets result of readNode(node) to array on obj[prop]
- * @private
- * @param {Element} node the xml element to parse
- * @param {object} obj  the object to modify
- * @param {string} prop key on obj to hold empty object
- */
-function addTextProp(node, obj, prop) {
-  const property = prop.toLowerCase();
-  obj[property] = [];
-  Array.prototype.forEach.call(node.childNodes, child => {
-    if (child && child.nodeName === '#text') {
-      obj[property].push({
-        text: child.textContent.trim(),
-      });
-    } else if (child && child.nodeName === '#cdata-section') {
-      obj[property].push({
-        text: child.textContent,
-      });
-    } else if (child && parsers[child.localName]) {
-      const childObj = {};
-      parsers[child.localName](child, childObj, child.localName);
-      obj[property].push(childObj);
-    }
-  });
 }
 
 /**
@@ -355,38 +361,6 @@ export default function Reader(sld) {
  * */
 
 /**
- * A filter predicate.
- * @typedef Filter
- * @name Filter
- * @description [filter operators](http://schemas.opengis.net/filter/1.1.0/filter.xsd), see also
- * [geoserver](http://docs.geoserver.org/stable/en/user/styling/sld/reference/filters.html)
- * @property {string} type Can be 'comparison', 'and', 'or', 'not', or 'featureid'.
- * @property {Array<string>} [fids] An array of feature id's. Required for type='featureid'.
- * @property {string} [operator] Required for type='comparison'. Can be one of
- * 'propertyisequalto',
- * 'propertyisnotequalto',
- * 'propertyislessthan',
- * 'propertyislessthanorequalto',
- * 'propertyisgreaterthan',
- * 'propertyisgreaterthanorequalto',
- * 'propertyislike',
- * 'propertyisbetween'
- * @property {Filter[]} [predicates] Required for type='and' or type='or'.
- * An array of filter predicates that must all evaluate to true for 'and', or
- * for which at least one must evaluate to true for 'or'.
- * @property {Filter} [predicate] Required for type='not'. A single predicate to negate.
- * @property {string} [propertyname] Required for type='comparison'.
- * @property {string} [literal] A literal value to use in a comparison,
- * required for type='comparison'.
- * @property {string} [lowerboundary] Lower boundary, required for operator='propertyisbetween'.
- * @property {string} [upperboundary] Upper boundary, required for operator='propertyisbetween'.
- * @property {string} [wildcard] Required wildcard character for operator='propertyislike'.
- * @property {string} [singlechar] Required single char match character,
- * required for operator='propertyislike'.
- * @property {string} [escapechar] Required escape character for operator='propertyislike'.
- */
-
-/**
  * @typedef PolygonSymbolizer
  * @name PolygonSymbolizer
  * @description a typedef for [PolygonSymbolizer](http://schemas.opengis.net/se/1.1.0/Symbolizer.xsd), see also
@@ -404,6 +378,15 @@ export default function Reader(sld) {
  * [geoserver docs](http://docs.geoserver.org/stable/en/user/styling/sld/reference/linesymbolizer.html#sld-reference-linesymbolizer)
  * @property {Object} stroke
  * @property {Object[]} stroke.css one object per CssParameter with props name (camelcased) & value
+ * @property {Object} graphicstroke
+ * @property {Object} graphicstroke.graphic
+ * @property {Object} graphicstroke.graphic.mark
+ * @property {string} graphicstroke.graphic.mark.wellknownname
+ * @property {Object} graphicstroke.graphic.mark.fill
+ * @property {Object} graphicstroke.graphic.mark.stroke
+ * @property {Number} graphicstroke.graphic.opacity
+ * @property {Number} graphicstroke.graphic.size
+ * @property {Number} graphicstroke.graphic.rotation
  * */
 
 /**

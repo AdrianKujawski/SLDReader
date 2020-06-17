@@ -1,7 +1,7 @@
 {
   "extends": ["eslint-config-airbnb-base"],
   "parserOptions": {
-    "ecmaVersion": 6,
+    "ecmaVersion": 2018,
     "sourceType": "module"
   },
   "env": {
@@ -40,6 +40,7 @@
     ],
     "operator-linebreak": "off",
     "implicit-arrow-linebreak": "off",
-    "object-curly-newline": "off"
+    "object-curly-newline": "off",
+    "no-underscore-dangle": "off"
   }
 }
